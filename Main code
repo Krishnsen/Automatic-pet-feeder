@@ -1,0 +1,44 @@
+import customtkinter
+import threading
+import time
+
+class Feeder:
+    def __init__(self, feeding_time):
+        self.feeding_time = feeding_time
+
+    def feed(self):
+        print("Feeding...")
+        # simulate feeding by sleeping for 5 seconds
+        time.sleep(5)
+
+    def start_scheduled_feeding(self):
+        schedule_thread = threading.Thread(target=self.schedule_feeding)
+        schedule_thread.start()
+
+    def schedule_feeding(self):
+        while True:
+            current_time = time.localtime()
+            if current_time.tm_hour == self.feeding_time.hour and current_time.tm_min == self.feeding_time.minute:
+                self.feed()
+                # wait until next day to feed again
+                time.sleep(24*60*60)
+            else:
+                # check again in 1 minute
+                time.sleep(60)
+
+# create a new feeder object that will feed at 12:00 PM every day
+feeder = Feeder(feeding_time=time.strptime("12:00 PM", "%I:%M %p"))
+
+# create the GUI
+app = customtkinter.CTk()
+
+# create the "Feed Now" button
+feed_now_button = customtkinter.CTkButton(master=app, text="Feed Now", command=feeder.feed)
+feed_now_button.pack()
+
+# create the "Schedule Feeding" button
+schedule_button = customtkinter.CTkButton(master=app, text="Schedule Feeding", command=feeder.start_scheduled_feeding)
+schedule_button.pack()
+
+# start the GUI
+app.mainloop()
