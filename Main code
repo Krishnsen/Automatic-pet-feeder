@@ -1,44 +1,184 @@
 import customtkinter
-import threading
+import RPi.GPIO as GPIO
+from hx711 import HX711
+GPIO.setwarnings(False)
 import time
+import os
+import threading
+import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
+from picamera import PiCamera
+from datetime import datetime as dt
 
-class Feeder:
-    def __init__(self, feeding_time):
-        self.feeding_time = feeding_time
+GPIO.setmode(GPIO.BCM)
 
-    def feed(self):
-        print("Feeding...")
-        # simulate feeding by sleeping for 5 seconds
-        time.sleep(5)
+GPIO.setmode(GPIO.BCM)
+button_pin = 17
+servo_pin = 13
 
-    def start_scheduled_feeding(self):
-        schedule_thread = threading.Thread(target=self.schedule_feeding)
-        schedule_thread.start()
+GPIO.setup(servo_pin, GPIO.OUT)
+pwm = GPIO.PWM(servo_pin, 50)
+initial_duty_cycle = 0
+pwm.start(initial_duty_cycle)
 
-    def schedule_feeding(self):
-        while True:
-            current_time = time.localtime()
-            if current_time.tm_hour == self.feeding_time.hour and current_time.tm_min == self.feeding_time.minute:
-                self.feed()
-                # wait until next day to feed again
-                time.sleep(24*60*60)
-            else:
-                # check again in 1 minute
-                time.sleep(60)
+GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-# create a new feeder object that will feed at 12:00 PM every day
-feeder = Feeder(feeding_time=time.strptime("12:00 PM", "%I:%M %p"))
+camera = PiCamera()
+camera.rotation = 0
 
-# create the GUI
+customtkinter.set_appearance_mode("dark")
+customtkinter.set_default_color_theme("green")
+
 app = customtkinter.CTk()
+app.attributes('-fullscreen', True)
 
-# create the "Feed Now" button
-feed_now_button = customtkinter.CTkButton(master=app, text="Feed Now", command=feeder.feed)
-feed_now_button.pack()
+# Weight cell setup
+hx = HX711(dout_pin=19, pd_sck_pin=26)
+hx.zero()
 
-# create the "Schedule Feeding" button
-schedule_button = customtkinter.CTkButton(master=app, text="Schedule Feeding", command=feeder.start_scheduled_feeding)
-schedule_button.pack()
+def get_weight():
+    reading = (hx.get_data_mean() / 33002) * 163
+    return reading
 
-# start the GUI
+def take_picture():
+    now = dt.now()
+    filename = now.strftime("%Y-%m-%d_%H-%M-%S.jpg")
+    filepath = os.path.join(os.getcwd(), filename)
+    camera.capture(filepath)
+    print("Picture taken:", filename)
+    
+def save_weight_data(weight, timestamp):
+    data = {'Timestamp': [timestamp], 'Weight': [weight]}
+    df = pd.DataFrame(data)
+
+    csv_file = 'weight_data.csv'
+
+    if os.path.isfile(csv_file):
+        # If the file exists, append the data without the header
+        df.to_csv(csv_file, mode='a', header=False, index=False)
+    else:
+        # If the file doesn't exist, create it and write the header and data
+        df.to_csv(csv_file, mode='w', header=True, index=False)
+
+    print(f"Weight data saved: {timestamp}, {weight} grams")
+
+
+def activate_servo():
+    duty_cycle = 5
+    pwm.ChangeDutyCycle(duty_cycle)
+    start_time = time.time()
+
+    # Stop servo when the weight cell reaches 200 or after a predefined timeout
+    timeout = 30  # Set your desired timeout value here (in seconds)
+    while get_weight() < 200 and (time.time() - start_time) < timeout:
+        time.sleep(0.1)
+
+    pwm.ChangeDutyCycle(initial_duty_cycle)
+    take_picture()
+    weight = get_weight()
+    timestamp = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+    save_weight_data(weight, timestamp)
+
+
+def activate_servo_200_gram():
+    activate_servo()
+
+def on_button_press(event=None):
+    print("Button pressed")
+    duty_cycle = 5
+    pwm.ChangeDutyCycle(duty_cycle)
+
+def on_button_release(event=None):
+    print("Button released")
+    pwm.ChangeDutyCycle(initial_duty_cycle)
+
+def button_listener():
+    GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    try:
+        while True:
+            input_state = GPIO.input(button_pin)
+            if input_state == False:
+                print('Button pressed')
+                on_button_press()
+                while input_state == False:
+                    input_state = GPIO.input(button_pin)
+                    time.sleep(0.01)
+                on_button_release()
+            time.sleep(0.01)
+    except KeyboardInterrupt:
+        pass
+
+
+def scheduled_feeding():
+    feed_times = ["08:00:00", "15:20:00", "20:00:00"]
+    while True:
+        current_time = dt.now().strftime("%H:%M:%S")
+        print("Current time:", current_time)
+        if current_time in feed_times:
+            print("Feeding time!")
+            activate_servo()
+            weight = get_weight()
+            timestamp = dt.now().strftime("%Y-%m-%d %H:%M:%S")
+            save_weight_data(weight, timestamp)
+            time.sleep(60)
+        else:
+            time.sleep(60)
+
+
+def start_scheduled_feeding():
+    schedule_thread = threading.Thread(target=scheduled_feeding, daemon=True)
+    schedule_thread.start()
+    
+import numpy as np
+
+def plot_weight_data():
+    csv_file = 'weight_data.csv'
+
+    if os.path.isfile(csv_file):
+        df = pd.read_csv(csv_file)
+        if df.empty:
+            print("No weight data available.")
+            return
+        timestamp = np.array(df['Timestamp'])
+        weight = np.array(df['Weight'])
+        print(df)
+        plt.plot(timestamp, weight)
+        plt.xlabel('Timestamp')
+        plt.ylabel('Weight (grams)')
+        plt.title('Weight Data Over Time')
+        plt.xticks(rotation=45)
+        plt.show()
+    else:
+        print("No weight data available.")
+
+
+def quit():
+    app.destroy()
+    GPIO.cleanup()
+    pwm.stop()
+    plt.close('all')  # Close all open plots
+
+button_font = ("Helvetica", 18)
+
+button_200_gram = customtkinter.CTkButton(master=app, text="200 gram", command=activate_servo_200_gram, text_color="#000000", width=200, height=50,font=button_font)
+button_200_gram.place(relx=0.3, rely=0.3, anchor=customtkinter.CENTER)
+
+button_hold_food = customtkinter.CTkButton(master=app, text="Hold for food", command=None, text_color="#000000", width=200, height=50,font=button_font)
+button_hold_food.bind("<Button-1>", on_button_press)
+button_hold_food.bind("<ButtonRelease-1>", on_button_release)
+button_hold_food.place(relx=0.7, rely=0.3, anchor=customtkinter.CENTER)
+
+schedule_button = customtkinter.CTkButton(master=app, text="Schedule Feeding", command=start_scheduled_feeding, text_color="#000000", width=200, height=50, font=button_font)
+schedule_button.place(relx=0.3, rely=0.5, anchor=customtkinter.CENTER)
+
+plot_button = customtkinter.CTkButton(master=app, text="Plot Weight Data", command=plot_weight_data, text_color="#000000", width=200, height=50, font=button_font)
+plot_button.place(relx=0.7, rely=0.5, anchor=customtkinter.CENTER)
+
+quit_button = customtkinter.CTkButton(master=app, text="Quit", command=quit, text_color="#FF0000", width=120, height=35, font=button_font )
+quit_button.place(relx=0.9, rely=0.9, anchor=customtkinter.SE)
+
+button_thread = threading.Thread(target=button_listener, daemon=True)
+button_thread.start()
+
 app.mainloop()
