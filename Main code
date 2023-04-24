@@ -12,10 +12,10 @@ from picamera import PiCamera
 from datetime import datetime as dt
 
 GPIO.setmode(GPIO.BCM)
-
-GPIO.setmode(GPIO.BCM)
 button_pin = 17
 servo_pin = 13
+reset_button_pin = 16
+
 
 GPIO.setup(servo_pin, GPIO.OUT)
 pwm = GPIO.PWM(servo_pin, 50)
@@ -23,6 +23,7 @@ initial_duty_cycle = 0
 pwm.start(initial_duty_cycle)
 
 GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+GPIO.setup(reset_button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
 camera = PiCamera()
 camera.rotation = 0
@@ -79,7 +80,10 @@ def activate_servo():
     weight = get_weight()
     timestamp = dt.now().strftime("%Y-%m-%d %H:%M:%S")
     save_weight_data(weight, timestamp)
-
+    
+def hard_reset():
+    print("Hard reset initiated")
+    quit()
 
 def activate_servo_200_gram():
     activate_servo()
@@ -92,12 +96,14 @@ def on_button_press(event=None):
 def on_button_release(event=None):
     print("Button released")
     pwm.ChangeDutyCycle(initial_duty_cycle)
-
+    
 def button_listener():
     GPIO.setup(button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+    GPIO.setup(reset_button_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
     try:
         while True:
             input_state = GPIO.input(button_pin)
+            reset_input_state = GPIO.input(reset_button_pin)
             if input_state == False:
                 print('Button pressed')
                 on_button_press()
@@ -105,6 +111,12 @@ def button_listener():
                     input_state = GPIO.input(button_pin)
                     time.sleep(0.01)
                 on_button_release()
+            elif reset_input_state == False:
+                print('Reset button pressed')
+                hard_reset()
+                while reset_input_state == False:
+                    reset_input_state = GPIO.input(reset_button_pin)
+                    time.sleep(0.01)
             time.sleep(0.01)
     except KeyboardInterrupt:
         pass
